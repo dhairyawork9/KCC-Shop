@@ -105,57 +105,18 @@ async function sendMainMenu(to) {
   await sendWhatsAppPayload(payload);
 }
 
-// --- Courses Subsystem ---
+// --- Direct Courses List ---
 
-// Courses Category List
-async function sendCourseCategories(to) {
+// Show all courses directly in an interactive list (skipping categories)
+async function sendDirectCourseList(to) {
   const courses = await fetchCourses();
-  const categories = [...new Set(courses.map(c => c.category.trim()).filter(Boolean))].slice(0, 10);
 
-  if (categories.length === 0) {
+  if (courses.length === 0) {
     return sendTextMessage(to, 'Courses list is currently being updated. Please check back shortly!');
   }
 
-  const rows = categories.map((cat, idx) => ({
-    id: `crs_cat_${idx}`,
-    title: cat.substring(0, 24),
-    description: `Browse ${cat} courses`.substring(0, 72)
-  }));
-
-  const payload = {
-    messaging_product: 'whatsapp',
-    to: to,
-    type: 'interactive',
-    interactive: {
-      type: 'list',
-      header: { type: 'text', text: 'Course Programs' },
-      body: { text: 'Select a course category to view duration, syllabus, and fees:' },
-      action: {
-        button: 'Select Category',
-        sections: [{ title: 'Available Programs', rows: rows }]
-      }
-    }
-  };
-  await sendWhatsAppPayload(payload);
-}
-
-// List of Courses in Selected Category
-async function sendCourseList(to, categoryIndex) {
-  const courses = await fetchCourses();
-  const categories = [...new Set(courses.map(c => c.category.trim()).filter(Boolean))];
-  const selectedCat = categories[categoryIndex];
-
-  if (!selectedCat) {
-    return sendTextMessage(to, 'Category not found. Please select from the menu.');
-  }
-
-  const matched = courses.filter(c => c.category.toLowerCase() === selectedCat.toLowerCase()).slice(0, 10);
-
-  if (matched.length === 0) {
-    return sendTextMessage(to, `No courses found under ${selectedCat}.`);
-  }
-
-  const rows = matched.map((c) => ({
+  // WhatsApp lists support up to 10 rows per list
+  const rows = courses.slice(0, 10).map((c) => ({
     id: `crs_idx_${c.index}`,
     title: c.name.substring(0, 24),
     description: `${c.duration} | Fees: ₹${c.fees}`.substring(0, 72)
@@ -167,11 +128,11 @@ async function sendCourseList(to, categoryIndex) {
     type: 'interactive',
     interactive: {
       type: 'list',
-      header: { type: 'text', text: selectedCat.substring(0, 24) },
-      body: { text: 'Choose a course to see complete syllabus and admission details:' },
+      header: { type: 'text', text: 'Available Courses' },
+      body: { text: 'Select any course below to view duration, syllabus, and fee details:' },
       action: {
         button: 'View Courses',
-        sections: [{ title: 'Courses', rows: rows }]
+        sections: [{ title: 'Course Offerings', rows: rows }]
       }
     }
   };
@@ -195,7 +156,7 @@ async function sendCourseDetails(to, courseIndex) {
       type: 'button',
       header: { type: 'text', text: crs.name.substring(0, 24) },
       body: { 
-        text: `• Category: ${crs.category}\n` +
+        text: `• Program: *${crs.name}*\n` +
               `• Duration: *${crs.duration}*\n` +
               `• Fees: *₹${crs.fees}*\n` +
               `• Highlights: ${crs.highlights}\n\n` +
@@ -398,15 +359,13 @@ app.post('/webhook', async (req, res) => {
 
     console.log(`Action selected by ${from}: ${actionId}`);
 
+    // Direct course listing without intermediate category step
     if (actionId === 'nav_courses') {
-      await sendCourseCategories(from);
+      await sendDirectCourseList(from);
     } else if (actionId === 'nav_shop') {
       await sendProductCategories(from);
     } else if (actionId === 'nav_info') {
       await sendCentreInfo(from);
-    } else if (actionId.startsWith('crs_cat_')) {
-      const catIdx = parseInt(actionId.replace('crs_cat_', ''));
-      await sendCourseList(from, catIdx);
     } else if (actionId.startsWith('crs_idx_')) {
       const crsIdx = parseInt(actionId.replace('crs_idx_', ''));
       await sendCourseDetails(from, crsIdx);
@@ -439,7 +398,7 @@ app.post('/webhook', async (req, res) => {
     if (['hi', 'hello', 'hey', 'start', 'menu'].includes(text)) {
       await sendMainMenu(from);
     } else if (['course', 'courses', 'admission', 'study'].some(k => text.includes(k))) {
-      await sendCourseCategories(from);
+      await sendDirectCourseList(from);
     } else if (['price', 'shop', 'item', 'accessory', 'accessories'].some(k => text.includes(k))) {
       await sendProductCategories(from);
     } else {
