@@ -21,14 +21,12 @@ const userSessions = new Map();
 
 // Dictionary for common duration & category translations to Gujarati
 const gujaratiDictionary = {
-  // Categories
   'keyboard': 'કીબોર્ડ',
   'mouse': 'માઉસ',
   'cables': 'કેબલ અને વાયર',
   'accessories': 'કમ્પ્યુટર એસેસરીઝ',
   'storage': 'પેનડ્રાઈવ / હાર્ડડિસ્ક',
   'general': 'સામાન્ય સાધનો',
-  // Duration terms
   'month': 'મહિના',
   'months': 'મહિના',
   'year': 'વર્ષ',
@@ -101,7 +99,7 @@ async function fetchCsvData(url) {
   }
 }
 
-// 1. Fetch Products (checks for optional Gujarati columns in col 4/5 if added)
+// 1. Fetch Products
 async function fetchProducts() {
   const rows = await fetchCsvData(PRODUCTS_CSV_URL);
   const products = [];
@@ -114,7 +112,7 @@ async function fetchProducts() {
     products.push({
       index: products.length,
       item: item,
-      item_gu: cols[4] || item, // Uses Col E if provided in sheet, else falls back cleanly
+      item_gu: cols[4] || item,
       category: cols[1] || 'General',
       category_gu: translateText(cols[1] || 'General'),
       price: cols[2] || '0',
@@ -124,7 +122,7 @@ async function fetchProducts() {
   return products;
 }
 
-// 2. Fetch Courses (checks for optional Gujarati columns in col 5/6 if added)
+// 2. Fetch Courses
 async function fetchCourses() {
   const rows = await fetchCsvData(COURSES_CSV_URL);
   const courses = [];
@@ -138,7 +136,7 @@ async function fetchCourses() {
     courses.push({
       index: courses.length,
       name: name,
-      name_gu: cols[5] || name, // Uses Col F if provided in sheet, else falls back
+      name_gu: cols[5] || name,
       category: cols[1] || 'General',
       duration: rawDuration,
       duration_gu: translateText(rawDuration),
@@ -159,7 +157,6 @@ function getSession(from) {
 
 // --- WhatsApp Interactive UI Builders ---
 
-// Step 1: Language Selector
 async function sendLanguageSelector(to) {
   const payload = {
     messaging_product: 'whatsapp',
@@ -185,7 +182,6 @@ async function sendLanguageSelector(to) {
   await sendWhatsAppPayload(payload);
 }
 
-// Step 2: Main Menu
 async function sendMainMenu(to, lang = 'gu') {
   const session = getSession(to);
   session.lang = lang;
@@ -217,7 +213,7 @@ async function sendMainMenu(to, lang = 'gu') {
   await sendWhatsAppPayload(payload);
 }
 
-// --- Courses Subsystem (Bilingual Output) ---
+// --- Courses Subsystem ---
 
 async function sendDirectCourseList(to) {
   const session = getSession(to);
@@ -312,7 +308,7 @@ async function sendCourseDetails(to, courseIndex) {
   await sendWhatsAppPayload(payload);
 }
 
-// --- Shop Subsystem (Bilingual Output) ---
+// --- Shop Subsystem ---
 
 async function sendProductCategories(to) {
   const session = getSession(to);
@@ -439,7 +435,7 @@ async function sendProductDetails(to, productIndex) {
   await sendWhatsAppPayload(payload);
 }
 
-// Centre & Store Info
+// Centre Info
 async function sendCentreInfo(to) {
   const session = getSession(to);
   const isGu = session.lang === 'gu';
@@ -610,13 +606,29 @@ app.post('/webhook', async (req, res) => {
       await sendTextMessage(from, ackMsg);
 
       if (ADMIN_PHONE_NUMBER) {
+        const now = new Date();
+        const dateStr = now.toLocaleDateString('en-IN', {
+          timeZone: 'Asia/Kolkata',
+          day: '2-digit',
+          month: '2-digit',
+          year: 'numeric',
+          weekday: 'short'
+        });
+        const timeStr = now.toLocaleTimeString('en-IN', {
+          timeZone: 'Asia/Kolkata',
+          hour: '2-digit',
+          minute: '2-digit',
+          hour12: true
+        });
+
         const adminAlert =
           `🔔 *NEW COURSE ENQUIRY!*\n\n` +
           `👤 *Name:* ${studentName}\n` +
           `📞 *Phone:* +${from}\n` +
           `🎓 *Interested Course:* ${courseName}\n` +
           `🌐 *Language:* ${session.lang === 'gu' ? 'Gujarati' : 'English'}\n` +
-          `⏰ *Time:* ${new Date().toLocaleTimeString('en-IN', { timeZone: 'Asia/Kolkata' })}`;
+          `📅 *Date:* ${dateStr}\n` +
+          `⏰ *Time:* ${timeStr}`;
 
         await sendTextMessage(ADMIN_PHONE_NUMBER, adminAlert);
       }
