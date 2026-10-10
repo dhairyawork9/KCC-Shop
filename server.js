@@ -7,84 +7,129 @@ app.use(express.json());
 const PORT = process.env.PORT || 3000;
 const VERIFY_TOKEN = 'kcc_shop_bot_secret_2026';
 
-// Meta Access Token & Phone Number ID (leave as placeholders for now, we will add them from Meta)
 const WHATSAPP_TOKEN = process.env.WHATSAPP_TOKEN || '';
 const PHONE_NUMBER_ID = process.env.PHONE_NUMBER_ID || '';
 
-// Your published Google Sheet CSV link
 const SHEET_CSV_URL = 'https://docs.google.com/spreadsheets/d/e/2PACX-1vTAtj3pgbKJnhgoxx49-5HlrKs14jT1Bb-434RRDpgt4xdtCVSzD6px9dNmT-Rl8lCcV1Eb5Wh4S6Gs/pub?output=csv';
 
-// Helper: Fetch and format products from Google Sheet
-async function getProductCatalog() {
+// Fetch all rows from Google Sheet
+async function fetchSheetRows() {
   try {
     const response = await axios.get(SHEET_CSV_URL);
-    const lines = response.data.trim().split('\n');
-    if (lines.length <= 1) return 'No products found in the catalog right now.';
+    const lines = response.data.trim().split(/\r?\n/);
+    if (lines.length <= 1) return [];
 
-    let catalogText = '🛒 *KCC Shop - Price List*\n\n';
-    // Skip header line (index 0)
+    const products = [];
     for (let i = 1; i < lines.length; i++) {
-      const cols = lines[i].split(',').map(c => c.trim());
-      const item = cols[0] || 'Unknown';
-      const category = cols[1] || '';
-      const price = cols[2] || '0';
-      const unit = cols[3] || '';
-      const available = (cols[4] || 'yes').toLowerCase();
+      // Split by comma while trimming quotes
+      const cols = lines[i].split(',').map(c => c.replace(/^"|"$/g, '').trim());
+      if (!cols[0]) continue;
 
-      if (available === 'yes' || available === 'y') {
-        catalogText += `• *${item}* ${category ? `(${category})` : ''} - ₹${price} ${unit}\n`;
-      }
+      products.push({
+        item: cols[0] || '',
+        category: cols[1] || '',
+        price: cols[2] || '0',
+        unit: cols[3] || '',
+        available: (cols[4] || 'yes').toLowerCase()
+      });
     }
-    catalogText += '\nReply with the item name to enquire or place an order!';
-    return catalogText;
+    return products;
   } catch (error) {
     console.error('Error fetching sheet:', error.message);
-    return 'Sorry, could not load current prices at this moment.';
+    return [];
   }
 }
 
-// 1. Meta Webhook Verification endpoint
+// Generate the full catalog
+async function getProductCatalog() {
+  const products = await fetchSheetRows();
+  if (products.length === 0) return '🛒 *KCC Shop*\n\nCatalog is currently being updated. Please check back shortly!';
+
+  let catalogText = '🛒 *KCC Shop - Price List*\n\n';
+  let hasItems = false;
+
+  for (const p of products) {
+    // If available is empty or yes/y/available, show it
+    if (!p.available || p.available === 'yes' || p.available === 'y' || p.available === 'available') {
+      catalogText += `• *${p.item}* ${p.category ? `(${p.category})` : ''} - ₹${p.price} ${p.unit}\n`;
+      hasItems = true;
+    }
+  }
+
+  if (!hasItems) {
+    // Fallback: list all items even if available flag wasn't typed as 'yes'
+    for (const p of products) {
+      catalogText += `• *${p.item}* ${p.category ? `(${p.category})` : ''} - ₹${p.price} ${p.unit}\n`;
+    }
+  }
+
+  catalogText += '\nType the name of any item (e.g. *SMPS*) to view details or enquire!';
+  return catalogText;
+}
+
+// Search for a specific item (e.g. smps, mouse, keyboard)
+async function searchProduct(query) {
+  const products = await fetchSheetRows();
+  const q = query.toLowerCase().trim();
+
+  const matched = products.filter(p => p.item.toLowerCase().includes(q));
+  if (matched.length === 0) return null;
+
+  let reply = `🔍 *Search Results for "${query}":*\n\n`;
+  for (const p of matched) {
+    reply += `📦 *${p.item}*\n`;
+    if (p.category) reply += `Category: ${p.category}\n`;
+    reply += `Price: ₹${p.price} ${p.unit}\n`;
+    reply += `Status: ${p.available === 'no' ? '❌ Out of stock' : '✅ In stock'}\n\n`;
+  }
+  reply += 'To place an order or talk to our team, please send your order quantity!';
+  return reply;
+}
+
+// 1. Meta Webhook Verification
 app.get('/webhook', (req, res) => {
   const mode = req.query['hub.mode'];
   const token = req.query['hub.verify_token'];
   const challenge = req.query['hub.challenge'];
 
   if (mode === 'subscribe' && token === VERIFY_TOKEN) {
-  console.log('Webhook verified successfully!');
-  return res.status(200).send(challenge.toString());
-}
+    return res.status(200).send(challenge ? challenge.toString() : '');
+  }
   return res.sendStatus(403);
 });
 
-// 2. Incoming WhatsApp Message endpoint
+// 2. Incoming WhatsApp Message
 app.post('/webhook', async (req, res) => {
   const body = req.body;
 
   if (body.object && body.entry && body.entry[0].changes && body.entry[0].changes[0].value.messages) {
     const message = body.entry[0].changes[0].value.messages[0];
-    const from = message.from; // Customer's WhatsApp phone number
+    const from = message.from;
     const text = message.text ? message.text.body.trim().toLowerCase() : '';
 
-    console.log(`Received message from ${from}: ${text}`);
+    console.log(`Received from ${from}: ${text}`);
 
-    // If customer says "hi", "price", "products", "menu", or "catalog"
-    if (['hi', 'hello', 'price', 'prices', 'rate', 'rates', 'menu', 'catalog', 'shop', 'list'].some(keyword => text.includes(keyword))) {
+    if (['hi', 'hello', 'hey', 'start'].includes(text)) {
+      await sendWhatsAppMessage(from, 'Welcome to *KCC Shop*! 👋\n\n• Type *price* or *menu* to see our full rate list.\n• Or type the name of any product (like *SMPS*) to check price & stock.');
+    } else if (['price', 'prices', 'rate', 'rates', 'menu', 'catalog', 'list'].some(k => text.includes(k))) {
       const catalog = await getProductCatalog();
       await sendWhatsAppMessage(from, catalog);
     } else {
-      await sendWhatsAppMessage(from, 'Welcome to KCC Shop! Type *price* or *menu* to see our available items and rates.');
+      // Check if user is searching for a product in the sheet
+      const productReply = await searchProduct(text);
+      if (productReply) {
+        await sendWhatsAppMessage(from, productReply);
+      } else {
+        await sendWhatsAppMessage(from, `We could not find "${text}" in our catalog.\n\nType *price* to see all available items, or message our counter directly!`);
+      }
     }
   }
 
   res.sendStatus(200);
 });
 
-// Helper: Send reply back to customer via Meta Cloud API
 async function sendWhatsAppMessage(to, messageText) {
-  if (!WHATSAPP_TOKEN || !PHONE_NUMBER_ID) {
-    console.log('WhatsApp Token or Phone ID not set yet. Message preview:\n', messageText);
-    return;
-  }
+  if (!WHATSAPP_TOKEN || !PHONE_NUMBER_ID) return;
 
   try {
     await axios.post(
