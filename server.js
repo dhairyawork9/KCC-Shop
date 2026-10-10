@@ -9,7 +9,6 @@ const VERIFY_TOKEN = 'kcc_shop_bot_secret_2026';
 
 const WHATSAPP_TOKEN = process.env.WHATSAPP_TOKEN || '';
 const PHONE_NUMBER_ID = process.env.PHONE_NUMBER_ID || '';
-// Admin number to receive alerts (e.g., 9198XXXXXXXX)
 const ADMIN_PHONE_NUMBER = process.env.ADMIN_PHONE_NUMBER || '';
 
 // Google Sheets CSV Export URLs
@@ -18,10 +17,37 @@ const PRODUCTS_CSV_URL = `https://docs.google.com/spreadsheets/d/${SHEET_BASE_ID
 const COURSES_CSV_URL = `https://docs.google.com/spreadsheets/d/${SHEET_BASE_ID}/export?format=csv&gid=1144770014`;
 
 const processedMessages = new Set();
-// User session state: tracks pending course inquiries { [phoneNumber]: { stage: 'awaiting_name', course: 'CCC' } }
 const userSessions = new Map();
 
-// Robust CSV parser supporting quotes, commas, and internal newlines
+// Dictionary for common duration & category translations to Gujarati
+const gujaratiDictionary = {
+  // Categories
+  'keyboard': 'કીબોર્ડ',
+  'mouse': 'માઉસ',
+  'cables': 'કેબલ અને વાયર',
+  'accessories': 'કમ્પ્યુટર એસેસરીઝ',
+  'storage': 'પેનડ્રાઈવ / હાર્ડડિસ્ક',
+  'general': 'સામાન્ય સાધનો',
+  // Duration terms
+  'month': 'મહિના',
+  'months': 'મહિના',
+  'year': 'વર્ષ',
+  'years': 'વર્ષ',
+  'days': 'દિવસ',
+  'flexible': 'અનુકૂળ સમય'
+};
+
+function translateText(text) {
+  if (!text) return '';
+  let res = text;
+  for (const [en, gu] of Object.entries(gujaratiDictionary)) {
+    const reg = new RegExp(`\\b${en}\\b`, 'gi');
+    res = res.replace(reg, gu);
+  }
+  return res;
+}
+
+// Robust CSV parser
 function parseCsv(text) {
   const rows = [];
   let currentRow = [];
@@ -75,7 +101,7 @@ async function fetchCsvData(url) {
   }
 }
 
-// 1. Fetch Products
+// 1. Fetch Products (checks for optional Gujarati columns in col 4/5 if added)
 async function fetchProducts() {
   const rows = await fetchCsvData(PRODUCTS_CSV_URL);
   const products = [];
@@ -88,15 +114,17 @@ async function fetchProducts() {
     products.push({
       index: products.length,
       item: item,
+      item_gu: cols[4] || item, // Uses Col E if provided in sheet, else falls back cleanly
       category: cols[1] || 'General',
+      category_gu: translateText(cols[1] || 'General'),
       price: cols[2] || '0',
-      available: cols[3] || cols[4] || 'Available'
+      available: cols[3] || 'Available'
     });
   }
   return products;
 }
 
-// 2. Fetch Courses
+// 2. Fetch Courses (checks for optional Gujarati columns in col 5/6 if added)
 async function fetchCourses() {
   const rows = await fetchCsvData(COURSES_CSV_URL);
   const courses = [];
@@ -106,20 +134,33 @@ async function fetchCourses() {
     const name = cols[0];
     if (!name || name.toLowerCase().includes('course')) continue;
 
+    const rawDuration = cols[2] || 'Flexible';
     courses.push({
       index: courses.length,
       name: name,
+      name_gu: cols[5] || name, // Uses Col F if provided in sheet, else falls back
       category: cols[1] || 'General',
-      duration: cols[2] || 'Flexible',
+      duration: rawDuration,
+      duration_gu: translateText(rawDuration),
       fees: cols[3] || 'Contact Us',
-      highlights: cols[4] || 'Practical training & certification.'
+      highlights: cols[4] || 'Practical training & certification.',
+      highlights_gu: cols[6] || cols[4] || 'પ્રેક્ટિકલ ટ્રેનિંગ અને સર્ટિફિકેટ.'
     });
   }
   return courses;
 }
 
-// Main Welcome Menu
-async function sendMainMenu(to) {
+function getSession(from) {
+  if (!userSessions.has(from)) {
+    userSessions.set(from, { lang: 'gu', stage: 'idle', course: '' });
+  }
+  return userSessions.get(from);
+}
+
+// --- WhatsApp Interactive UI Builders ---
+
+// Step 1: Language Selector
+async function sendLanguageSelector(to) {
   const payload = {
     messaging_product: 'whatsapp',
     to: to,
@@ -127,12 +168,16 @@ async function sendMainMenu(to) {
     interactive: {
       type: 'button',
       header: { type: 'text', text: 'Kaushalya Computer Centre' },
-      body: { text: 'Welcome! We offer certified computer courses & hardware accessories.\n\nChoose an option below to explore:' },
+      body: { 
+        text: '🙏 *નમસ્તે! કૌશલ્ય કમ્પ્યુટર સેન્ટરમાં આપનું સ્વાગત છે.*\n' +
+              'Welcome to Kaushalya Computer Centre.\n\n' +
+              'કૃપા કરીને તમારી ભાષા પસંદ કરો:\n' +
+              'Please select your preferred language:' 
+      },
       action: {
         buttons: [
-          { type: 'reply', reply: { id: 'nav_courses', title: 'Courses' } },
-          { type: 'reply', reply: { id: 'nav_shop', title: 'Accessories' } },
-          { type: 'reply', reply: { id: 'nav_info', title: 'Centre Info' } }
+          { type: 'reply', reply: { id: 'lang_gu', title: 'ગુજરાતી' } },
+          { type: 'reply', reply: { id: 'lang_en', title: 'English' } }
         ]
       }
     }
@@ -140,60 +185,17 @@ async function sendMainMenu(to) {
   await sendWhatsAppPayload(payload);
 }
 
-// Direct Course List
-async function sendDirectCourseList(to) {
-  const courses = await fetchCourses();
+// Step 2: Main Menu
+async function sendMainMenu(to, lang = 'gu') {
+  const session = getSession(to);
+  session.lang = lang;
+  session.stage = 'idle';
 
-  if (courses.length === 0) {
-    return sendTextMessage(to, 'Courses list is currently being updated. Please check back shortly!');
-  }
+  const isGu = lang === 'gu';
 
-  const rows = courses.slice(0, 10).map((c) => ({
-    id: `crs_idx_${c.index}`,
-    title: c.name.substring(0, 24),
-    description: `${c.duration} | Fees: ₹${c.fees}`.substring(0, 72)
-  }));
-
-  const payload = {
-    messaging_product: 'whatsapp',
-    to: to,
-    type: 'interactive',
-    interactive: {
-      type: 'list',
-      header: { type: 'text', text: 'Available Courses' },
-      body: { text: 'Select any course below to view duration, syllabus, and fee details:' },
-      action: {
-        button: 'View Courses',
-        sections: [{ title: 'Course Offerings', rows: rows }]
-      }
-    }
-  };
-  await sendWhatsAppPayload(payload);
-}
-
-// Course Details Card
-async function sendCourseDetails(to, courseIndex) {
-  const courses = await fetchCourses();
-  const crs = courses.find(c => c.index === parseInt(courseIndex));
-
-  if (!crs) {
-    return sendTextMessage(to, 'Course details not found. Please browse from the menu.');
-  }
-
-  const formattedHighlights = crs.highlights
-    .split(/\r?\n/)
-    .map(line => line.trim())
-    .filter(Boolean)
-    .map(line => `  • ${line}`)
-    .join('\n');
-
-  const cardBody = 
-    `🎓 *${crs.name}*\n` +
-    `⏱ Duration: *${crs.duration}*\n` +
-    `💰 Fees: *₹${crs.fees}*\n\n` +
-    `📋 *Syllabus & Highlights:*\n` +
-    `${formattedHighlights}\n\n` +
-    `Govt. recognized certification & 1:1 lab practice!`;
+  const bodyText = isGu
+    ? 'કૌશલ્ય કમ્પ્યુટર સેન્ટર અને KCC શોપમાં આપનું સ્વાગત છે.\n\nનીચે આપેલા વિકલ્પોમાંથી પસંદ કરો:'
+    : 'Welcome to Kaushalya Computer Centre & Shop.\n\nChoose an option below to explore:';
 
   const payload = {
     messaging_product: 'whatsapp',
@@ -201,12 +203,13 @@ async function sendCourseDetails(to, courseIndex) {
     type: 'interactive',
     interactive: {
       type: 'button',
-      header: { type: 'text', text: crs.name.substring(0, 24) },
-      body: { text: cardBody },
+      header: { type: 'text', text: 'Kaushalya Computer Centre' },
+      body: { text: bodyText },
       action: {
         buttons: [
-          { type: 'reply', reply: { id: `enq_crs_${crs.index}`, title: 'Enquire / Join' } },
-          { type: 'reply', reply: { id: 'nav_courses', title: 'More Courses' } }
+          { type: 'reply', reply: { id: 'nav_courses', title: isGu ? 'કમ્પ્યુટર કોર્સ' : 'Courses' } },
+          { type: 'reply', reply: { id: 'nav_shop', title: isGu ? 'એસેસરીઝ' : 'Accessories' } },
+          { type: 'reply', reply: { id: 'nav_info', title: isGu ? 'સેન્ટર માહિતી' : 'Centre Info' } }
         ]
       }
     }
@@ -214,19 +217,24 @@ async function sendCourseDetails(to, courseIndex) {
   await sendWhatsAppPayload(payload);
 }
 
-// Shop Subsystem
-async function sendProductCategories(to) {
-  const products = await fetchProducts();
-  const categories = [...new Set(products.map(p => p.category.trim()).filter(Boolean))].slice(0, 10);
+// --- Courses Subsystem (Bilingual Output) ---
 
-  if (categories.length === 0) {
-    return sendTextMessage(to, 'Products list is currently being updated.');
+async function sendDirectCourseList(to) {
+  const session = getSession(to);
+  const isGu = session.lang === 'gu';
+  const courses = await fetchCourses();
+
+  if (courses.length === 0) {
+    const emptyMsg = isGu 
+      ? 'કોર્સ લિસ્ટ હાલમાં અપડેટ થઈ રહ્યું છે.' 
+      : 'Courses list is currently being updated.';
+    return sendTextMessage(to, emptyMsg);
   }
 
-  const rows = categories.map((cat, idx) => ({
-    id: `shp_cat_${idx}`,
-    title: cat.substring(0, 24),
-    description: `View items in ${cat}`.substring(0, 72)
+  const rows = courses.slice(0, 10).map((c) => ({
+    id: `crs_idx_${c.index}`,
+    title: (isGu ? c.name_gu : c.name).substring(0, 24),
+    description: isGu ? `સમય: ${c.duration_gu} | ફી: ₹${c.fees}`.substring(0, 72) : `Duration: ${c.duration} | Fees: ₹${c.fees}`.substring(0, 72)
   }));
 
   const payload = {
@@ -235,11 +243,108 @@ async function sendProductCategories(to) {
     type: 'interactive',
     interactive: {
       type: 'list',
-      header: { type: 'text', text: 'Shop Categories' },
-      body: { text: 'Select a category to view accessories and prices:' },
+      header: { type: 'text', text: isGu ? 'ઉપલબ્ધ કમ્પ્યુટર કોર્સ' : 'Available Courses' },
+      body: { 
+        text: isGu 
+          ? 'સંપૂર્ણ સિલેબસ, સમયગાળો અને ફી જોવા માટે કોર્સ પસંદ કરો:'
+          : 'Select any course below to view duration, syllabus, and fee details:'
+      },
       action: {
-        button: 'Select Category',
-        sections: [{ title: 'Categories', rows: rows }]
+        button: isGu ? 'કોર્સ પસંદ કરો' : 'View Courses',
+        sections: [{ title: isGu ? 'કોર્સ યાદી' : 'Course Offerings', rows: rows }]
+      }
+    }
+  };
+  await sendWhatsAppPayload(payload);
+}
+
+async function sendCourseDetails(to, courseIndex) {
+  const session = getSession(to);
+  const isGu = session.lang === 'gu';
+  const courses = await fetchCourses();
+  const crs = courses.find(c => c.index === parseInt(courseIndex));
+
+  if (!crs) {
+    return sendTextMessage(to, isGu ? 'કોર્સ મળ્યો નથી.' : 'Course details not found.');
+  }
+
+  const activeHighlights = isGu ? crs.highlights_gu : crs.highlights;
+  const formattedHighlights = activeHighlights
+    .split(/\r?\n/)
+    .map(line => line.trim())
+    .filter(Boolean)
+    .map(line => `  • ${line}`)
+    .join('\n');
+
+  const courseDisplayName = isGu ? crs.name_gu : crs.name;
+  const durationDisplay = isGu ? crs.duration_gu : crs.duration;
+
+  const cardBody = isGu
+    ? `🎓 *${courseDisplayName}*\n` +
+      `⏱ સમયગાળો: *${durationDisplay}*\n` +
+      `💰 ફી: *₹${crs.fees}*\n\n` +
+      `📋 *સિલેબસ અને વિશેષતાઓ:*\n` +
+      `${formattedHighlights}\n\n` +
+      `✅ સરકાર માન્ય પ્રમાણપત્ર અને ૧:૧ લેબ પ્રેક્ટિસ!`
+    : `🎓 *${courseDisplayName}*\n` +
+      `⏱ Duration: *${durationDisplay}*\n` +
+      `💰 Fees: *₹${crs.fees}*\n\n` +
+      `📋 *Syllabus & Highlights:*\n` +
+      `${formattedHighlights}\n\n` +
+      `✅ Govt. recognized certification & 1:1 lab practice!`;
+
+  const payload = {
+    messaging_product: 'whatsapp',
+    to: to,
+    type: 'interactive',
+    interactive: {
+      type: 'button',
+      header: { type: 'text', text: courseDisplayName.substring(0, 24) },
+      body: { text: cardBody },
+      action: {
+        buttons: [
+          { type: 'reply', reply: { id: `enq_crs_${crs.index}`, title: isGu ? 'પ્રવેશ / પૂછપરછ' : 'Enquire / Join' } },
+          { type: 'reply', reply: { id: 'nav_courses', title: isGu ? 'બીજા કોર્સ' : 'More Courses' } }
+        ]
+      }
+    }
+  };
+  await sendWhatsAppPayload(payload);
+}
+
+// --- Shop Subsystem (Bilingual Output) ---
+
+async function sendProductCategories(to) {
+  const session = getSession(to);
+  const isGu = session.lang === 'gu';
+  const products = await fetchProducts();
+  const categories = [...new Set(products.map(p => p.category.trim()).filter(Boolean))].slice(0, 10);
+
+  if (categories.length === 0) {
+    return sendTextMessage(to, isGu ? 'પ્રોડક્ટ્સ ઉપલબ્ધ નથી.' : 'Products list is currently being updated.');
+  }
+
+  const rows = categories.map((cat, idx) => ({
+    id: `shp_cat_${idx}`,
+    title: (isGu ? translateText(cat) : cat).substring(0, 24),
+    description: isGu ? `${translateText(cat)} આઇટમ્સ જુઓ` : `View items in ${cat}`.substring(0, 72)
+  }));
+
+  const payload = {
+    messaging_product: 'whatsapp',
+    to: to,
+    type: 'interactive',
+    interactive: {
+      type: 'list',
+      header: { type: 'text', text: isGu ? 'શોપ કેટેગરી' : 'Shop Categories' },
+      body: { 
+        text: isGu 
+          ? 'કમ્પ્યુટર સાધનો અને કિંમતો જોવા માટે કેટેગરી પસંદ કરો:' 
+          : 'Select a category to view accessories and prices:' 
+      },
+      action: {
+        button: isGu ? 'કેટેગરી પસંદ કરો' : 'Select Category',
+        sections: [{ title: isGu ? 'કેટેગરીઝ' : 'Categories', rows: rows }]
       }
     }
   };
@@ -247,24 +352,26 @@ async function sendProductCategories(to) {
 }
 
 async function sendProductList(to, categoryIndex) {
+  const session = getSession(to);
+  const isGu = session.lang === 'gu';
   const products = await fetchProducts();
   const categories = [...new Set(products.map(p => p.category.trim()).filter(Boolean))];
   const selectedCat = categories[categoryIndex];
 
   if (!selectedCat) {
-    return sendTextMessage(to, 'Category not found. Please select from the menu.');
+    return sendTextMessage(to, isGu ? 'કેટેગરી મળી નથી.' : 'Category not found.');
   }
 
   const matched = products.filter(p => p.category.toLowerCase() === selectedCat.toLowerCase()).slice(0, 10);
 
   if (matched.length === 0) {
-    return sendTextMessage(to, `No items found under ${selectedCat}.`);
+    return sendTextMessage(to, isGu ? `કોઈ આઇટમ મળી નથી.` : `No items found under ${selectedCat}.`);
   }
 
   const rows = matched.map((p) => ({
     id: `shp_idx_${p.index}`,
-    title: p.item.substring(0, 24),
-    description: `₹${p.price} | In Stock`.substring(0, 72)
+    title: (isGu ? p.item_gu : p.item).substring(0, 24),
+    description: isGu ? `કિંમત: ₹${p.price} | ઉપલબ્ધ છે` : `Price: ₹${p.price} | In Stock`.substring(0, 72)
   }));
 
   const payload = {
@@ -273,11 +380,15 @@ async function sendProductList(to, categoryIndex) {
     type: 'interactive',
     interactive: {
       type: 'list',
-      header: { type: 'text', text: selectedCat.substring(0, 24) },
-      body: { text: 'Choose an item for details or to place an order:' },
+      header: { type: 'text', text: (isGu ? translateText(selectedCat) : selectedCat).substring(0, 24) },
+      body: { 
+        text: isGu 
+          ? 'વિગતો જોવા અથવા ઓર્ડર કરવા આઇટમ પસંદ કરો:' 
+          : 'Choose an item for details or to place an order:' 
+      },
       action: {
-        button: 'Select Product',
-        sections: [{ title: 'Items', rows: rows }]
+        button: isGu ? 'પ્રોડક્ટ પસંદ કરો' : 'Select Product',
+        sections: [{ title: isGu ? 'સાધનો' : 'Items', rows: rows }]
       }
     }
   };
@@ -285,12 +396,29 @@ async function sendProductList(to, categoryIndex) {
 }
 
 async function sendProductDetails(to, productIndex) {
+  const session = getSession(to);
+  const isGu = session.lang === 'gu';
   const products = await fetchProducts();
   const prod = products.find(p => p.index === parseInt(productIndex));
 
   if (!prod) {
-    return sendTextMessage(to, 'Product not found. Please choose from our catalog.');
+    return sendTextMessage(to, isGu ? 'પ્રોડક્ટ મળી નથી.' : 'Product not found.');
   }
+
+  const itemDisplayName = isGu ? prod.item_gu : prod.item;
+  const categoryDisplayName = isGu ? prod.category_gu : prod.category;
+
+  const bodyText = isGu
+    ? `📦 *${itemDisplayName}*\n` +
+      `• કેટેગરી: ${categoryDisplayName}\n` +
+      `• કિંમત: *₹${prod.price}*\n` +
+      `• સ્ટોક સ્થિતિ: ✅ ઉપલબ્ધ છે\n\n` +
+      `આ આઇટમ બુક અથવા ઓર્ડર કરવા નીચે ટેપ કરો:`
+    : `📦 *${itemDisplayName}*\n` +
+      `• Category: ${categoryDisplayName}\n` +
+      `• Price: *₹${prod.price}*\n` +
+      `• Status: ✅ In Stock\n\n` +
+      `Tap below to enquire or reserve this item:`;
 
   const payload = {
     messaging_product: 'whatsapp',
@@ -298,12 +426,12 @@ async function sendProductDetails(to, productIndex) {
     type: 'interactive',
     interactive: {
       type: 'button',
-      header: { type: 'text', text: prod.item.substring(0, 24) },
-      body: { text: `• Category: ${prod.category}\n• Price: *₹${prod.price}*\n• Status: ✅ In Stock\n\nTap below to enquire or reserve this item!` },
+      header: { type: 'text', text: itemDisplayName.substring(0, 24) },
+      body: { text: bodyText },
       action: {
         buttons: [
-          { type: 'reply', reply: { id: `order_shp_${prod.index}`, title: 'Order Item' } },
-          { type: 'reply', reply: { id: 'nav_shop', title: 'More Items' } }
+          { type: 'reply', reply: { id: `order_shp_${prod.index}`, title: isGu ? 'ઓર્ડર કરો' : 'Order Item' } },
+          { type: 'reply', reply: { id: 'nav_shop', title: isGu ? 'બીજી આઇટમ્સ' : 'More Items' } }
         ]
       }
     }
@@ -311,22 +439,40 @@ async function sendProductDetails(to, productIndex) {
   await sendWhatsAppPayload(payload);
 }
 
+// Centre & Store Info
 async function sendCentreInfo(to) {
-  const info = '🏢 *Kaushalya Computer Centre & KCC Shop*\n\n' +
-    '📍 *Address:* Kapadvanj, Gujarat\n' +
-    '⏰ *Centre Timings:* 8:00 AM – 8:00 PM (Mon - Sat)\n\n' +
-    '🎓 *Academy Features:*\n' +
-    '• 100% Practical Training & 1:1 Lab Guidance\n' +
-    '• Govt. & ISO Recognized Certification\n' +
-    '• Courses: CCC, Tally Prime, DTP, Programming, Hardware\n\n' +
-    '🛒 *Shop Services:*\n' +
-    '• Computer & Laptop Sales and Service\n' +
-    '• Original Cables, Adapters, Keyboards & Accessories\n\n' +
-    'Feel free to visit us or enquire here on WhatsApp!';
+  const session = getSession(to);
+  const isGu = session.lang === 'gu';
+
+  const info = isGu
+    ? '🏢 *કૌશલ્ય કમ્પ્યુટર સેન્ટર & KCC શોપ*\n\n' +
+      '📍 *સરનામું:* કપડવંજ, ગુજરાત\n' +
+      '⏰ *સમય:* સવારે ૮:૦૦ થી સાંજે ૮:૦૦ (સોમવાર થી શનિવાર)\n\n' +
+      '🎓 *એકેડેમી સુવિધાઓ:*\n' +
+      '• ૧૦૦% પ્રેક્ટિકલ લેબ ટ્રેનિંગ અને અંગત માર્ગદર્શન\n' +
+      '• સરકાર અને ISO માન્યતા પ્રાપ્ત સર્ટિફિકેટ\n' +
+      '• મુખ્ય કોર્સ: CCC, ટેલી પ્રાઇમ (GST સાથે), DTP, બેઝિક કમ્પ્યુટર, હાર્ડવેર\n\n' +
+      '🛒 *શોપ સુવિધાઓ:*\n' +
+      '• કમ્પ્યુટર / લેપટોપ રિપેરિંગ અને સર્વિસ\n' +
+      '• ઓરિજિનલ કીબોર્ડ, માઉસ, કેબલ્સ, પેનડ્રાઈવ અને એસેસરીઝ\n\n' +
+      'રૂબરૂ મુલાકાત લો અથવા WhatsApp પર પૂછપરછ કરો!'
+    : '🏢 *Kaushalya Computer Centre & KCC Shop*\n\n' +
+      '📍 *Address:* Kapadvanj, Gujarat\n' +
+      '⏰ *Centre Timings:* 8:00 AM – 8:00 PM (Mon - Sat)\n\n' +
+      '🎓 *Academy Features:*\n' +
+      '• 100% Practical Training & 1:1 Lab Guidance\n' +
+      '• Govt. & ISO Recognized Certification\n' +
+      '• Courses: CCC, Tally Prime (with GST), DTP, Programming, Hardware\n\n' +
+      '🛒 *Shop Services:*\n' +
+      '• Computer & Laptop Sales and Service\n' +
+      '• Original Cables, Adapters, Keyboards & Accessories\n\n' +
+      'Feel free to visit us or enquire here on WhatsApp!';
+
   await sendTextMessage(to, info);
-  await sendMainMenu(to);
+  await sendMainMenu(to, session.lang);
 }
 
+// WhatsApp Dispatcher
 async function sendWhatsAppPayload(payload) {
   if (!WHATSAPP_TOKEN || !PHONE_NUMBER_ID) return;
   try {
@@ -354,7 +500,7 @@ async function sendTextMessage(to, text) {
   });
 }
 
-// Meta Webhook Verification
+// Webhook Verification
 app.get('/webhook', (req, res) => {
   const mode = req.query['hub.mode'];
   const token = req.query['hub.verify_token'];
@@ -366,7 +512,7 @@ app.get('/webhook', (req, res) => {
   return res.sendStatus(403);
 });
 
-// Incoming Message / Interaction Router
+// Incoming Message Router
 app.post('/webhook', async (req, res) => {
   res.sendStatus(200);
 
@@ -385,7 +531,9 @@ app.post('/webhook', async (req, res) => {
     processedMessages.delete(processedMessages.values().next().value);
   }
 
-  // 1. Interactive Button / List Clicks
+  const session = getSession(from);
+
+  // 1. Button / List Selection
   if (message.type === 'interactive') {
     const interactive = message.interactive;
     const buttonId = interactive.button_reply ? interactive.button_reply.id : null;
@@ -394,7 +542,13 @@ app.post('/webhook', async (req, res) => {
 
     console.log(`Action selected by ${from}: ${actionId}`);
 
-    if (actionId === 'nav_courses') {
+    if (actionId === 'lang_gu') {
+      session.lang = 'gu';
+      await sendMainMenu(from, 'gu');
+    } else if (actionId === 'lang_en') {
+      session.lang = 'en';
+      await sendMainMenu(from, 'en');
+    } else if (actionId === 'nav_courses') {
       await sendDirectCourseList(from);
     } else if (actionId === 'nav_shop') {
       await sendProductCategories(from);
@@ -407,15 +561,16 @@ app.post('/webhook', async (req, res) => {
       const crsIdx = parseInt(actionId.replace('enq_crs_', ''));
       const courses = await fetchCourses();
       const crs = courses.find(c => c.index === crsIdx);
-      const courseName = crs ? crs.name : 'Selected Course';
+      const courseName = crs ? (session.lang === 'gu' ? crs.name_gu : crs.name) : 'Selected Course';
 
-      // Store stage in session and ask for customer name
-      userSessions.set(from, { stage: 'awaiting_name', course: courseName });
+      session.stage = 'awaiting_name';
+      session.course = courseName;
 
-      await sendTextMessage(
-        from,
-        `Great! You have selected *${courseName}* 🎓\n\nPlease type your *Full Name* below to proceed:`
-      );
+      const promptMsg = session.lang === 'gu'
+        ? `ખૂબ સરસ! તમે *${courseName}* પસંદ કર્યો છે 🎓\n\nકૃપા કરીને આગળ વધવા માટે તમારું *પૂરું નામ* નીચે ટાઇપ કરો:`
+        : `Great! You have selected *${courseName}* 🎓\n\nPlease type your *Full Name* below to proceed:`;
+
+      await sendTextMessage(from, promptMsg);
     } else if (actionId.startsWith('shp_cat_')) {
       const catIdx = parseInt(actionId.replace('shp_cat_', ''));
       await sendProductList(from, catIdx);
@@ -426,8 +581,13 @@ app.post('/webhook', async (req, res) => {
       const prodIdx = parseInt(actionId.replace('order_shp_', ''));
       const products = await fetchProducts();
       const prod = products.find(p => p.index === prodIdx);
-      const item = prod ? prod.item : 'this item';
-      await sendTextMessage(from, `✅ Inquiry received for *${item}*.\n\nPlease reply with your *required quantity*, and we will confirm stock and bill amount right away!`);
+      const item = prod ? (session.lang === 'gu' ? prod.item_gu : prod.item) : 'this item';
+
+      const orderPrompt = session.lang === 'gu'
+        ? `✅ *${item}* માટે પૂછપરછ મળી છે.\n\nકૃપા કરીને તમારું *જરૂરી નંગ (Quantity)* લખીને મોકલો, અમે તરત જ સ્ટોક અને બિલ જણાવીશું!`
+        : `✅ Inquiry received for *${item}*.\n\nPlease reply with your *required quantity*, and we will confirm stock and bill amount right away!`;
+
+      await sendTextMessage(from, orderPrompt);
     }
     return;
   }
@@ -437,28 +597,25 @@ app.post('/webhook', async (req, res) => {
     const text = message.text.body.trim();
     const lowerText = text.toLowerCase();
 
-    // Check if user is in "awaiting_name" stage
-    const session = userSessions.get(from);
-    if (session && session.stage === 'awaiting_name') {
+    if (session.stage === 'awaiting_name') {
       const studentName = text;
       const courseName = session.course;
 
-      // Clear session after capturing
-      userSessions.delete(from);
+      session.stage = 'idle';
 
-      // Reply to student
-      await sendTextMessage(
-        from,
-        `✅ Thank you, *${studentName}*!\n\nYour enquiry for *${courseName}* has been registered successfully. Our team at Kaushalya Computer Centre will contact you shortly regarding batches and demo classes.`
-      );
+      const ackMsg = session.lang === 'gu'
+        ? `✅ આભાર, *${studentName}*!\n\nતમારી *${courseName}* માટેની નોંધણી સફળતાપૂર્વક થઈ ગઈ છે. કૌશલ્ય કમ્પ્યુટર સેન્ટરની ટીમ ટૂંક સમયમાં બેચ સમય અને ડેમો ક્લાસ માટે તમારો સંપર્ક કરશે.`
+        : `✅ Thank you, *${studentName}*!\n\nYour enquiry for *${courseName}* has been registered successfully. Our team at Kaushalya Computer Centre will contact you shortly regarding batches and demo classes.`;
 
-      // Forward lead notification to Admin WhatsApp number
+      await sendTextMessage(from, ackMsg);
+
       if (ADMIN_PHONE_NUMBER) {
         const adminAlert =
           `🔔 *NEW COURSE ENQUIRY!*\n\n` +
           `👤 *Name:* ${studentName}\n` +
           `📞 *Phone:* +${from}\n` +
           `🎓 *Interested Course:* ${courseName}\n` +
+          `🌐 *Language:* ${session.lang === 'gu' ? 'Gujarati' : 'English'}\n` +
           `⏰ *Time:* ${new Date().toLocaleTimeString('en-IN', { timeZone: 'Asia/Kolkata' })}`;
 
         await sendTextMessage(ADMIN_PHONE_NUMBER, adminAlert);
@@ -466,15 +623,14 @@ app.post('/webhook', async (req, res) => {
       return;
     }
 
-    // Default Navigation Responses
-    if (['hi', 'hello', 'hey', 'start', 'menu'].includes(lowerText)) {
-      await sendMainMenu(from);
-    } else if (['course', 'courses', 'admission', 'study'].some(k => lowerText.includes(k))) {
+    if (['hi', 'hello', 'hey', 'start', 'menu', 'kem cho', 'નમસ્તે'].includes(lowerText)) {
+      await sendLanguageSelector(from);
+    } else if (['course', 'courses', 'admission', 'study', 'કોર્સ'].some(k => lowerText.includes(k))) {
       await sendDirectCourseList(from);
-    } else if (['price', 'shop', 'item', 'accessory', 'accessories'].some(k => lowerText.includes(k))) {
+    } else if (['price', 'shop', 'item', 'accessory', 'accessories', 'ભાવ'].some(k => lowerText.includes(k))) {
       await sendProductCategories(from);
     } else {
-      await sendMainMenu(from);
+      await sendLanguageSelector(from);
     }
   }
 });
