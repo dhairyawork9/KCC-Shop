@@ -43,11 +43,13 @@ async function fetchProducts() {
   const rows = await fetchCsvData(PRODUCTS_CSV_URL);
   const products = [];
 
-  for (const cols of rows) {
+  for (let i = 0; i < rows.length; i++) {
+    const cols = rows[i];
     const item = cols[0];
     if (!item || item.toLowerCase() === 'item') continue;
 
     products.push({
+      index: products.length,
       item: item,
       category: cols[1] || 'General',
       price: cols[2] || '0',
@@ -62,11 +64,13 @@ async function fetchCourses() {
   const rows = await fetchCsvData(COURSES_CSV_URL);
   const courses = [];
 
-  for (const cols of rows) {
+  for (let i = 0; i < rows.length; i++) {
+    const cols = rows[i];
     const name = cols[0];
     if (!name || name.toLowerCase().includes('course')) continue;
 
     courses.push({
+      index: courses.length,
       name: name,
       category: cols[1] || 'General',
       duration: cols[2] || 'Flexible',
@@ -79,7 +83,7 @@ async function fetchCourses() {
 
 // --- WhatsApp Interactive UI Builders ---
 
-// Main Welcome Menu (Button titles are well under 20 characters)
+// Main Welcome Menu
 async function sendMainMenu(to) {
   const payload = {
     messaging_product: 'whatsapp',
@@ -113,7 +117,7 @@ async function sendCourseCategories(to) {
   }
 
   const rows = categories.map((cat, idx) => ({
-    id: `crs_cat_${idx}_${cat.toLowerCase().replace(/\s+/g, '_')}`.substring(0, 200),
+    id: `crs_cat_${idx}`,
     title: cat.substring(0, 24),
     description: `Browse ${cat} courses`.substring(0, 72)
   }));
@@ -136,16 +140,23 @@ async function sendCourseCategories(to) {
 }
 
 // List of Courses in Selected Category
-async function sendCourseList(to, categoryName) {
+async function sendCourseList(to, categoryIndex) {
   const courses = await fetchCourses();
-  const matched = courses.filter(c => c.category.toLowerCase() === categoryName.toLowerCase()).slice(0, 10);
+  const categories = [...new Set(courses.map(c => c.category.trim()).filter(Boolean))];
+  const selectedCat = categories[categoryIndex];
 
-  if (matched.length === 0) {
-    return sendTextMessage(to, `No courses found under ${categoryName}.`);
+  if (!selectedCat) {
+    return sendTextMessage(to, 'Category not found. Please select from the menu.');
   }
 
-  const rows = matched.map((c, idx) => ({
-    id: `crs_i_${idx}_${c.name.toLowerCase().replace(/[^a-z0-9]/g, '_')}`.substring(0, 200),
+  const matched = courses.filter(c => c.category.toLowerCase() === selectedCat.toLowerCase()).slice(0, 10);
+
+  if (matched.length === 0) {
+    return sendTextMessage(to, `No courses found under ${selectedCat}.`);
+  }
+
+  const rows = matched.map((c) => ({
+    id: `crs_idx_${c.index}`,
     title: c.name.substring(0, 24),
     description: `${c.duration} | Fees: ₹${c.fees}`.substring(0, 72)
   }));
@@ -156,7 +167,7 @@ async function sendCourseList(to, categoryName) {
     type: 'interactive',
     interactive: {
       type: 'list',
-      header: { type: 'text', text: categoryName.substring(0, 24) },
+      header: { type: 'text', text: selectedCat.substring(0, 24) },
       body: { text: 'Choose a course to see complete syllabus and admission details:' },
       action: {
         button: 'View Courses',
@@ -168,10 +179,9 @@ async function sendCourseList(to, categoryName) {
 }
 
 // Single Course Detail Card
-async function sendCourseDetails(to, courseKey) {
+async function sendCourseDetails(to, courseIndex) {
   const courses = await fetchCourses();
-  const clean = courseKey.replace(/_/g, ' ').toLowerCase();
-  const crs = courses.find(c => c.name.toLowerCase().includes(clean) || clean.includes(c.name.toLowerCase()));
+  const crs = courses.find(c => c.index === parseInt(courseIndex));
 
   if (!crs) {
     return sendTextMessage(to, 'Course details not found. Please browse from the menu.');
@@ -193,7 +203,7 @@ async function sendCourseDetails(to, courseKey) {
       },
       action: {
         buttons: [
-          { type: 'reply', reply: { id: `enq_crs_${crs.name.substring(0, 20)}`, title: 'Enquire / Join' } },
+          { type: 'reply', reply: { id: `enq_crs_${crs.index}`, title: 'Enquire / Join' } },
           { type: 'reply', reply: { id: 'nav_courses', title: 'More Courses' } }
         ]
       }
@@ -214,7 +224,7 @@ async function sendProductCategories(to) {
   }
 
   const rows = categories.map((cat, idx) => ({
-    id: `shp_cat_${idx}_${cat.toLowerCase().replace(/\s+/g, '_')}`.substring(0, 200),
+    id: `shp_cat_${idx}`,
     title: cat.substring(0, 24),
     description: `View items in ${cat}`.substring(0, 72)
   }));
@@ -237,16 +247,23 @@ async function sendProductCategories(to) {
 }
 
 // Products in Category
-async function sendProductList(to, categoryName) {
+async function sendProductList(to, categoryIndex) {
   const products = await fetchProducts();
-  const matched = products.filter(p => p.category.toLowerCase() === categoryName.toLowerCase()).slice(0, 10);
+  const categories = [...new Set(products.map(p => p.category.trim()).filter(Boolean))];
+  const selectedCat = categories[categoryIndex];
 
-  if (matched.length === 0) {
-    return sendTextMessage(to, `No items found under ${categoryName}.`);
+  if (!selectedCat) {
+    return sendTextMessage(to, 'Category not found. Please select from the menu.');
   }
 
-  const rows = matched.map((p, idx) => ({
-    id: `shp_i_${idx}_${p.item.toLowerCase().replace(/[^a-z0-9]/g, '_')}`.substring(0, 200),
+  const matched = products.filter(p => p.category.toLowerCase() === selectedCat.toLowerCase()).slice(0, 10);
+
+  if (matched.length === 0) {
+    return sendTextMessage(to, `No items found under ${selectedCat}.`);
+  }
+
+  const rows = matched.map((p) => ({
+    id: `shp_idx_${p.index}`,
     title: p.item.substring(0, 24),
     description: `₹${p.price} | In Stock`.substring(0, 72)
   }));
@@ -257,7 +274,7 @@ async function sendProductList(to, categoryName) {
     type: 'interactive',
     interactive: {
       type: 'list',
-      header: { type: 'text', text: categoryName.substring(0, 24) },
+      header: { type: 'text', text: selectedCat.substring(0, 24) },
       body: { text: 'Choose an item for details or to place an order:' },
       action: {
         button: 'Select Product',
@@ -269,10 +286,9 @@ async function sendProductList(to, categoryName) {
 }
 
 // Product Details Card
-async function sendProductDetails(to, itemKey) {
+async function sendProductDetails(to, productIndex) {
   const products = await fetchProducts();
-  const clean = itemKey.replace(/_/g, ' ').toLowerCase();
-  const prod = products.find(p => p.item.toLowerCase().includes(clean) || clean.includes(p.item.toLowerCase()));
+  const prod = products.find(p => p.index === parseInt(productIndex));
 
   if (!prod) {
     return sendTextMessage(to, 'Product not found. Please choose from our catalog.');
@@ -288,7 +304,7 @@ async function sendProductDetails(to, itemKey) {
       body: { text: `• Category: ${prod.category}\n• Price: *₹${prod.price}*\n• Status: ✅ In Stock\n\nTap below to enquire or reserve this item!` },
       action: {
         buttons: [
-          { type: 'reply', reply: { id: `order_shp_${prod.item.substring(0, 20)}`, title: 'Order Item' } },
+          { type: 'reply', reply: { id: `order_shp_${prod.index}`, title: 'Order Item' } },
           { type: 'reply', reply: { id: 'nav_shop', title: 'More Items' } }
         ]
       }
@@ -389,27 +405,29 @@ app.post('/webhook', async (req, res) => {
     } else if (actionId === 'nav_info') {
       await sendCentreInfo(from);
     } else if (actionId.startsWith('crs_cat_')) {
-      const parts = actionId.split('_');
-      const catName = parts.slice(3).join(' ');
-      await sendCourseList(from, catName);
-    } else if (actionId.startsWith('crs_i_')) {
-      const parts = actionId.split('_');
-      const courseKey = parts.slice(3).join(' ');
-      await sendCourseDetails(from, courseKey);
+      const catIdx = parseInt(actionId.replace('crs_cat_', ''));
+      await sendCourseList(from, catIdx);
+    } else if (actionId.startsWith('crs_idx_')) {
+      const crsIdx = parseInt(actionId.replace('crs_idx_', ''));
+      await sendCourseDetails(from, crsIdx);
     } else if (actionId.startsWith('enq_crs_')) {
-      const courseName = actionId.replace('enq_crs_', '');
-      await sendTextMessage(from, `✅ Thank you for your interest in *${courseName}*!\n\nPlease reply with your *name* and preferred batch time (Morning/Evening), and our counselor will confirm your demo class.`);
+      const crsIdx = parseInt(actionId.replace('enq_crs_', ''));
+      const courses = await fetchCourses();
+      const crs = courses.find(c => c.index === crsIdx);
+      const name = crs ? crs.name : 'this course';
+      await sendTextMessage(from, `✅ Thank you for your interest in *${name}*!\n\nPlease reply with your *name* and preferred batch time (Morning/Evening), and our counselor will confirm your demo class.`);
     } else if (actionId.startsWith('shp_cat_')) {
-      const parts = actionId.split('_');
-      const catName = parts.slice(3).join(' ');
-      await sendProductList(from, catName);
-    } else if (actionId.startsWith('shp_i_')) {
-      const parts = actionId.split('_');
-      const itemKey = parts.slice(3).join(' ');
-      await sendProductDetails(from, itemKey);
+      const catIdx = parseInt(actionId.replace('shp_cat_', ''));
+      await sendProductList(from, catIdx);
+    } else if (actionId.startsWith('shp_idx_')) {
+      const prodIdx = parseInt(actionId.replace('shp_idx_', ''));
+      await sendProductDetails(from, prodIdx);
     } else if (actionId.startsWith('order_shp_')) {
-      const itemName = actionId.replace('order_shp_', '');
-      await sendTextMessage(from, `✅ Inquiry received for *${itemName}*.\n\nPlease reply with your *required quantity*, and we will confirm stock and bill amount right away!`);
+      const prodIdx = parseInt(actionId.replace('order_shp_', ''));
+      const products = await fetchProducts();
+      const prod = products.find(p => p.index === prodIdx);
+      const item = prod ? prod.item : 'this item';
+      await sendTextMessage(from, `✅ Inquiry received for *${item}*.\n\nPlease reply with your *required quantity*, and we will confirm stock and bill amount right away!`);
     }
     return;
   }
