@@ -24,7 +24,9 @@ const gujaratiDictionary = {
   'keyboard': 'કીબોર્ડ',
   'mouse': 'માઉસ',
   'cables': 'કેબલ અને વાયર',
-  'accessories': 'કમ્પ્યુટર એસેસરીઝ',
+  'accessories': 'એસેસરીઝ',
+  'adapters': 'એડેપ્ટર',
+  'adapter': 'એડેપ્ટર',
   'storage': 'પેનડ્રાઈવ / હાર્ડડિસ્ક',
   'general': 'સામાન્ય સાધનો',
   'month': 'મહિના',
@@ -45,7 +47,7 @@ function translateText(text) {
   return res;
 }
 
-// Robust CSV parser
+// Full CSV parser supporting quotes, commas, and internal newlines
 function parseCsv(text) {
   const rows = [];
   let currentRow = [];
@@ -113,8 +115,8 @@ async function fetchProducts() {
       index: products.length,
       item: item,
       item_gu: cols[4] || item,
-      category: cols[1] || 'General',
-      category_gu: translateText(cols[1] || 'General'),
+      category: cols[1] || 'Accessories',
+      category_gu: translateText(cols[1] || 'Accessories'),
       price: cols[2] || '0',
       available: cols[3] || 'Available'
     });
@@ -204,7 +206,7 @@ async function sendMainMenu(to, lang = 'gu') {
       action: {
         buttons: [
           { type: 'reply', reply: { id: 'nav_courses', title: isGu ? 'કમ્પ્યુટર કોર્સ' : 'Courses' } },
-          { type: 'reply', reply: { id: 'nav_shop', title: isGu ? 'એસેસરીઝ' : 'Accessories' } },
+          { type: 'reply', reply: { id: 'nav_shop_menu', title: isGu ? 'એસેસરીઝ' : 'Accessories' } },
           { type: 'reply', reply: { id: 'nav_info', title: isGu ? 'સેન્ટર માહિતી' : 'Centre Info' } }
         ]
       }
@@ -310,6 +312,97 @@ async function sendCourseDetails(to, courseIndex) {
 
 // --- Shop Subsystem ---
 
+// Accessories Main Choice: Browse by Category OR View Full Catalog
+async function sendShopChoiceMenu(to) {
+  const session = getSession(to);
+  const isGu = session.lang === 'gu';
+
+  const bodyText = isGu
+    ? 'કમ્પ્યુટર એસેસરીઝ અને હાર્ડવેર:\nતમે કેટેગરી વાઈઝ બ્રાઉઝ કરી શકો છો અથવા સંપૂર્ણ લિસ્ટ જોઈ શકો છો.'
+    : 'Computer Accessories & Hardware:\nYou can browse by category or view our complete list.';
+
+  const payload = {
+    messaging_product: 'whatsapp',
+    to: to,
+    type: 'interactive',
+    interactive: {
+      type: 'button',
+      header: { type: 'text', text: isGu ? 'KCC એસેસરીઝ' : 'KCC Accessories' },
+      body: { text: bodyText },
+      action: {
+        buttons: [
+          { type: 'reply', reply: { id: 'nav_shop_cats', title: isGu ? 'કેટેગરી મુજબ' : 'By Category' } },
+          { type: 'reply', reply: { id: 'nav_shop_all', title: isGu ? 'બધા સાધનો લિસ્ટ' : 'All Items List' } },
+          { type: 'reply', reply: { id: 'nav_menu_main', title: isGu ? 'મુખ્ય મેનૂ' : 'Main Menu' } }
+        ]
+      }
+    }
+  };
+  await sendWhatsAppPayload(payload);
+}
+
+// Display Complete Catalog Grouped Cleanly by Category
+async function sendFullCatalog(to) {
+  const session = getSession(to);
+  const isGu = session.lang === 'gu';
+  const products = await fetchProducts();
+
+  if (products.length === 0) {
+    return sendTextMessage(to, isGu ? 'પ્રોડક્ટ્સ ઉપલબ્ધ નથી.' : 'No products found.');
+  }
+
+  // Group products by Category
+  const grouped = {};
+  for (const p of products) {
+    const cat = (p.category || 'Accessories').trim();
+    if (!grouped[cat]) grouped[cat] = [];
+    grouped[cat].push(p);
+  }
+
+  let catalogText = isGu
+    ? '📋 *KCC Products & Accessories List*\n━━━━━━━━━━━━━━━━━━━━\n'
+    : '📋 *KCC Products & Accessories List*\n━━━━━━━━━━━━━━━━━━━━\n';
+
+  for (const [catName, items] of Object.entries(grouped)) {
+    const heading = isGu ? `${translateText(catName)} (${catName.toUpperCase()})` : catName.toUpperCase();
+    catalogText += `📁 *${heading}*\n`;
+
+    for (const item of items) {
+      const name = isGu ? item.item_gu : item.item;
+      catalogText += `- ${name}\n`;
+    }
+    catalogText += '\n';
+  }
+
+  catalogText = catalogText.trim() + '\n━━━━━━━━━━━━━━━━━━━━';
+
+  // Send the catalog text
+  await sendTextMessage(to, catalogText);
+
+  // Quick navigation buttons right below the list
+  const followUpPayload = {
+    messaging_product: 'whatsapp',
+    to: to,
+    type: 'interactive',
+    interactive: {
+      type: 'button',
+      body: { 
+        text: isGu 
+          ? 'ભાવ જાણવા અથવા ઓર્ડર કરવા માટે નીચેનું બટન દબાવો:' 
+          : 'To view prices or place an order, choose below:' 
+      },
+      action: {
+        buttons: [
+          { type: 'reply', reply: { id: 'nav_shop_cats', title: isGu ? 'કેટેગરી / ઓર્ડર' : 'View Prices & Order' } },
+          { type: 'reply', reply: { id: 'nav_menu_main', title: isGu ? 'મુખ્ય મેનૂ' : 'Main Menu' } }
+        ]
+      }
+    }
+  };
+  await sendWhatsAppPayload(followUpPayload);
+}
+
+// Shop Categories
 async function sendProductCategories(to) {
   const session = getSession(to);
   const isGu = session.lang === 'gu';
@@ -347,6 +440,7 @@ async function sendProductCategories(to) {
   await sendWhatsAppPayload(payload);
 }
 
+// Products in Category
 async function sendProductList(to, categoryIndex) {
   const session = getSession(to);
   const isGu = session.lang === 'gu';
@@ -391,6 +485,7 @@ async function sendProductList(to, categoryIndex) {
   await sendWhatsAppPayload(payload);
 }
 
+// Product Details Card
 async function sendProductDetails(to, productIndex) {
   const session = getSession(to);
   const isGu = session.lang === 'gu';
@@ -427,7 +522,7 @@ async function sendProductDetails(to, productIndex) {
       action: {
         buttons: [
           { type: 'reply', reply: { id: `order_shp_${prod.index}`, title: isGu ? 'ઓર્ડર કરો' : 'Order Item' } },
-          { type: 'reply', reply: { id: 'nav_shop', title: isGu ? 'બીજી આઇટમ્સ' : 'More Items' } }
+          { type: 'reply', reply: { id: 'nav_shop_cats', title: isGu ? 'બીજી કેટેગરી' : 'More Categories' } }
         ]
       }
     }
@@ -544,10 +639,16 @@ app.post('/webhook', async (req, res) => {
     } else if (actionId === 'lang_en') {
       session.lang = 'en';
       await sendMainMenu(from, 'en');
+    } else if (actionId === 'nav_menu_main') {
+      await sendMainMenu(from, session.lang);
     } else if (actionId === 'nav_courses') {
       await sendDirectCourseList(from);
-    } else if (actionId === 'nav_shop') {
+    } else if (actionId === 'nav_shop_menu') {
+      await sendShopChoiceMenu(from);
+    } else if (actionId === 'nav_shop_cats') {
       await sendProductCategories(from);
+    } else if (actionId === 'nav_shop_all') {
+      await sendFullCatalog(from);
     } else if (actionId === 'nav_info') {
       await sendCentreInfo(from);
     } else if (actionId.startsWith('crs_idx_')) {
@@ -639,8 +740,10 @@ app.post('/webhook', async (req, res) => {
       await sendLanguageSelector(from);
     } else if (['course', 'courses', 'admission', 'study', 'કોર્સ'].some(k => lowerText.includes(k))) {
       await sendDirectCourseList(from);
-    } else if (['price', 'shop', 'item', 'accessory', 'accessories', 'ભાવ'].some(k => lowerText.includes(k))) {
-      await sendProductCategories(from);
+    } else if (['catalog', 'rate', 'price list', 'લિસ્ટ', 'ભાવ પત્રક'].some(k => lowerText.includes(k))) {
+      await sendFullCatalog(from);
+    } else if (['price', 'shop', 'item', 'accessory', 'accessories', 'ભાવ', 'સાધનો'].some(k => lowerText.includes(k))) {
+      await sendShopChoiceMenu(from);
     } else {
       await sendLanguageSelector(from);
     }
