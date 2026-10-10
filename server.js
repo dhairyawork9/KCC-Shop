@@ -9,6 +9,8 @@ const VERIFY_TOKEN = 'kcc_shop_bot_secret_2026';
 
 const WHATSAPP_TOKEN = process.env.WHATSAPP_TOKEN || '';
 const PHONE_NUMBER_ID = process.env.PHONE_NUMBER_ID || '';
+// Admin number to receive alerts (e.g., 9198XXXXXXXX)
+const ADMIN_PHONE_NUMBER = process.env.ADMIN_PHONE_NUMBER || '';
 
 // Google Sheets CSV Export URLs
 const SHEET_BASE_ID = '11IzWbS5OJ31XbvF4FT9KBJLiuu-kBDyR7oyAyGZ3XoY';
@@ -16,8 +18,10 @@ const PRODUCTS_CSV_URL = `https://docs.google.com/spreadsheets/d/${SHEET_BASE_ID
 const COURSES_CSV_URL = `https://docs.google.com/spreadsheets/d/${SHEET_BASE_ID}/export?format=csv&gid=1144770014`;
 
 const processedMessages = new Set();
+// User session state: tracks pending course inquiries { [phoneNumber]: { stage: 'awaiting_name', course: 'CCC' } }
+const userSessions = new Map();
 
-// Full CSV parser supporting quotes, commas, and internal newlines
+// Robust CSV parser supporting quotes, commas, and internal newlines
 function parseCsv(text) {
   const rows = [];
   let currentRow = [];
@@ -31,9 +35,9 @@ function parseCsv(text) {
     if (char === '"') {
       if (inQuotes && nextChar === '"') {
         currentVal += '"';
-        i++; // skip escaped quote
+        i++;
       } else {
-        inQuotes = !inQuotes; // toggle quote state
+        inQuotes = !inQuotes;
       }
     } else if (char === ',' && !inQuotes) {
       currentRow.push(currentVal.trim());
@@ -61,7 +65,6 @@ function parseCsv(text) {
   return rows;
 }
 
-// Helper to fetch CSV cleanly
 async function fetchCsvData(url) {
   try {
     const response = await axios.get(url, { timeout: 6000 });
@@ -115,8 +118,6 @@ async function fetchCourses() {
   return courses;
 }
 
-// --- WhatsApp Interactive UI Builders ---
-
 // Main Welcome Menu
 async function sendMainMenu(to) {
   const payload = {
@@ -139,8 +140,7 @@ async function sendMainMenu(to) {
   await sendWhatsAppPayload(payload);
 }
 
-// --- Direct Courses List ---
-
+// Direct Course List
 async function sendDirectCourseList(to) {
   const courses = await fetchCourses();
 
@@ -171,7 +171,7 @@ async function sendDirectCourseList(to) {
   await sendWhatsAppPayload(payload);
 }
 
-// Single Course Detail Card with Full Multi-line Syllabus
+// Course Details Card
 async function sendCourseDetails(to, courseIndex) {
   const courses = await fetchCourses();
   const crs = courses.find(c => c.index === parseInt(courseIndex));
@@ -180,7 +180,6 @@ async function sendCourseDetails(to, courseIndex) {
     return sendTextMessage(to, 'Course details not found. Please browse from the menu.');
   }
 
-  // Format multi-line highlights neatly
   const formattedHighlights = crs.highlights
     .split(/\r?\n/)
     .map(line => line.trim())
@@ -215,8 +214,7 @@ async function sendCourseDetails(to, courseIndex) {
   await sendWhatsAppPayload(payload);
 }
 
-// --- Shop Subsystem ---
-
+// Shop Subsystem
 async function sendProductCategories(to) {
   const products = await fetchProducts();
   const categories = [...new Set(products.map(p => p.category.trim()).filter(Boolean))].slice(0, 10);
@@ -387,6 +385,7 @@ app.post('/webhook', async (req, res) => {
     processedMessages.delete(processedMessages.values().next().value);
   }
 
+  // 1. Interactive Button / List Clicks
   if (message.type === 'interactive') {
     const interactive = message.interactive;
     const buttonId = interactive.button_reply ? interactive.button_reply.id : null;
@@ -408,8 +407,15 @@ app.post('/webhook', async (req, res) => {
       const crsIdx = parseInt(actionId.replace('enq_crs_', ''));
       const courses = await fetchCourses();
       const crs = courses.find(c => c.index === crsIdx);
-      const name = crs ? crs.name : 'this course';
-      await sendTextMessage(from, `✅ Thank you for your interest in *${name}*!\n\nPlease reply with your *name* and preferred batch time (Morning/Evening), and our counselor will confirm your demo class.`);
+      const courseName = crs ? crs.name : 'Selected Course';
+
+      // Store stage in session and ask for customer name
+      userSessions.set(from, { stage: 'awaiting_name', course: courseName });
+
+      await sendTextMessage(
+        from,
+        `Great! You have selected *${courseName}* 🎓\n\nPlease type your *Full Name* below to proceed:`
+      );
     } else if (actionId.startsWith('shp_cat_')) {
       const catIdx = parseInt(actionId.replace('shp_cat_', ''));
       await sendProductList(from, catIdx);
@@ -426,14 +432,46 @@ app.post('/webhook', async (req, res) => {
     return;
   }
 
+  // 2. Incoming Plain Text Messages
   if (message.type === 'text') {
-    const text = message.text.body.trim().toLowerCase();
+    const text = message.text.body.trim();
+    const lowerText = text.toLowerCase();
 
-    if (['hi', 'hello', 'hey', 'start', 'menu'].includes(text)) {
+    // Check if user is in "awaiting_name" stage
+    const session = userSessions.get(from);
+    if (session && session.stage === 'awaiting_name') {
+      const studentName = text;
+      const courseName = session.course;
+
+      // Clear session after capturing
+      userSessions.delete(from);
+
+      // Reply to student
+      await sendTextMessage(
+        from,
+        `✅ Thank you, *${studentName}*!\n\nYour enquiry for *${courseName}* has been registered successfully. Our team at Kaushalya Computer Centre will contact you shortly regarding batches and demo classes.`
+      );
+
+      // Forward lead notification to Admin WhatsApp number
+      if (ADMIN_PHONE_NUMBER) {
+        const adminAlert =
+          `🔔 *NEW COURSE ENQUIRY!*\n\n` +
+          `👤 *Name:* ${studentName}\n` +
+          `📞 *Phone:* +${from}\n` +
+          `🎓 *Interested Course:* ${courseName}\n` +
+          `⏰ *Time:* ${new Date().toLocaleTimeString('en-IN', { timeZone: 'Asia/Kolkata' })}`;
+
+        await sendTextMessage(ADMIN_PHONE_NUMBER, adminAlert);
+      }
+      return;
+    }
+
+    // Default Navigation Responses
+    if (['hi', 'hello', 'hey', 'start', 'menu'].includes(lowerText)) {
       await sendMainMenu(from);
-    } else if (['course', 'courses', 'admission', 'study'].some(k => text.includes(k))) {
+    } else if (['course', 'courses', 'admission', 'study'].some(k => lowerText.includes(k))) {
       await sendDirectCourseList(from);
-    } else if (['price', 'shop', 'item', 'accessory', 'accessories'].some(k => text.includes(k))) {
+    } else if (['price', 'shop', 'item', 'accessory', 'accessories'].some(k => lowerText.includes(k))) {
       await sendProductCategories(from);
     } else {
       await sendMainMenu(from);
