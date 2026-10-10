@@ -17,21 +17,55 @@ const COURSES_CSV_URL = `https://docs.google.com/spreadsheets/d/${SHEET_BASE_ID}
 
 const processedMessages = new Set();
 
-// Helper to fetch and parse CSV rows safely
+// Full CSV parser supporting quotes, commas, and internal newlines
+function parseCsv(text) {
+  const rows = [];
+  let currentRow = [];
+  let currentVal = '';
+  let inQuotes = false;
+
+  for (let i = 0; i < text.length; i++) {
+    const char = text[i];
+    const nextChar = text[i + 1];
+
+    if (char === '"') {
+      if (inQuotes && nextChar === '"') {
+        currentVal += '"';
+        i++; // skip escaped quote
+      } else {
+        inQuotes = !inQuotes; // toggle quote state
+      }
+    } else if (char === ',' && !inQuotes) {
+      currentRow.push(currentVal.trim());
+      currentVal = '';
+    } else if ((char === '\r' || char === '\n') && !inQuotes) {
+      if (char === '\r' && nextChar === '\n') i++;
+      currentRow.push(currentVal.trim());
+      if (currentRow.some(col => col.length > 0)) {
+        rows.push(currentRow);
+      }
+      currentRow = [];
+      currentVal = '';
+    } else {
+      currentVal += char;
+    }
+  }
+
+  if (currentVal || currentRow.length > 0) {
+    currentRow.push(currentVal.trim());
+    if (currentRow.some(col => col.length > 0)) {
+      rows.push(currentRow);
+    }
+  }
+
+  return rows;
+}
+
+// Helper to fetch CSV cleanly
 async function fetchCsvData(url) {
   try {
     const response = await axios.get(url, { timeout: 6000 });
-    const lines = response.data.trim().split(/\r?\n/);
-    if (lines.length <= 1) return [];
-
-    const rows = [];
-    for (let i = 0; i < lines.length; i++) {
-      const cols = lines[i].split(',').map(c => c.replace(/^"|"$/g, '').trim());
-      if (cols.length > 0 && cols[0]) {
-        rows.push(cols);
-      }
-    }
-    return rows;
+    return parseCsv(response.data);
   } catch (err) {
     console.error(`Error reading ${url}:`, err.message);
     return [];
@@ -107,7 +141,6 @@ async function sendMainMenu(to) {
 
 // --- Direct Courses List ---
 
-// Show all courses directly in an interactive list (skipping categories)
 async function sendDirectCourseList(to) {
   const courses = await fetchCourses();
 
@@ -115,7 +148,6 @@ async function sendDirectCourseList(to) {
     return sendTextMessage(to, 'Courses list is currently being updated. Please check back shortly!');
   }
 
-  // WhatsApp lists support up to 10 rows per list
   const rows = courses.slice(0, 10).map((c) => ({
     id: `crs_idx_${c.index}`,
     title: c.name.substring(0, 24),
@@ -139,7 +171,7 @@ async function sendDirectCourseList(to) {
   await sendWhatsAppPayload(payload);
 }
 
-// Single Course Detail Card
+// Single Course Detail Card with Full Multi-line Syllabus
 async function sendCourseDetails(to, courseIndex) {
   const courses = await fetchCourses();
   const crs = courses.find(c => c.index === parseInt(courseIndex));
@@ -148,6 +180,22 @@ async function sendCourseDetails(to, courseIndex) {
     return sendTextMessage(to, 'Course details not found. Please browse from the menu.');
   }
 
+  // Format multi-line highlights neatly
+  const formattedHighlights = crs.highlights
+    .split(/\r?\n/)
+    .map(line => line.trim())
+    .filter(Boolean)
+    .map(line => `  • ${line}`)
+    .join('\n');
+
+  const cardBody = 
+    `🎓 *${crs.name}*\n` +
+    `⏱ Duration: *${crs.duration}*\n` +
+    `💰 Fees: *₹${crs.fees}*\n\n` +
+    `📋 *Syllabus & Highlights:*\n` +
+    `${formattedHighlights}\n\n` +
+    `Govt. recognized certification & 1:1 lab practice!`;
+
   const payload = {
     messaging_product: 'whatsapp',
     to: to,
@@ -155,13 +203,7 @@ async function sendCourseDetails(to, courseIndex) {
     interactive: {
       type: 'button',
       header: { type: 'text', text: crs.name.substring(0, 24) },
-      body: { 
-        text: `• Program: *${crs.name}*\n` +
-              `• Duration: *${crs.duration}*\n` +
-              `• Fees: *₹${crs.fees}*\n` +
-              `• Highlights: ${crs.highlights}\n\n` +
-              `Govt. recognized certification & practical labs available!`
-      },
+      body: { text: cardBody },
       action: {
         buttons: [
           { type: 'reply', reply: { id: `enq_crs_${crs.index}`, title: 'Enquire / Join' } },
@@ -175,7 +217,6 @@ async function sendCourseDetails(to, courseIndex) {
 
 // --- Shop Subsystem ---
 
-// Shop Categories
 async function sendProductCategories(to) {
   const products = await fetchProducts();
   const categories = [...new Set(products.map(p => p.category.trim()).filter(Boolean))].slice(0, 10);
@@ -207,7 +248,6 @@ async function sendProductCategories(to) {
   await sendWhatsAppPayload(payload);
 }
 
-// Products in Category
 async function sendProductList(to, categoryIndex) {
   const products = await fetchProducts();
   const categories = [...new Set(products.map(p => p.category.trim()).filter(Boolean))];
@@ -246,7 +286,6 @@ async function sendProductList(to, categoryIndex) {
   await sendWhatsAppPayload(payload);
 }
 
-// Product Details Card
 async function sendProductDetails(to, productIndex) {
   const products = await fetchProducts();
   const prod = products.find(p => p.index === parseInt(productIndex));
@@ -274,7 +313,6 @@ async function sendProductDetails(to, productIndex) {
   await sendWhatsAppPayload(payload);
 }
 
-// Combined Info Screen
 async function sendCentreInfo(to) {
   const info = '🏢 *Kaushalya Computer Centre & KCC Shop*\n\n' +
     '📍 *Address:* Kapadvanj, Gujarat\n' +
@@ -291,7 +329,6 @@ async function sendCentreInfo(to) {
   await sendMainMenu(to);
 }
 
-// WhatsApp Dispatcher
 async function sendWhatsAppPayload(payload) {
   if (!WHATSAPP_TOKEN || !PHONE_NUMBER_ID) return;
   try {
@@ -350,7 +387,6 @@ app.post('/webhook', async (req, res) => {
     processedMessages.delete(processedMessages.values().next().value);
   }
 
-  // 1. Button / List selections
   if (message.type === 'interactive') {
     const interactive = message.interactive;
     const buttonId = interactive.button_reply ? interactive.button_reply.id : null;
@@ -359,7 +395,6 @@ app.post('/webhook', async (req, res) => {
 
     console.log(`Action selected by ${from}: ${actionId}`);
 
-    // Direct course listing without intermediate category step
     if (actionId === 'nav_courses') {
       await sendDirectCourseList(from);
     } else if (actionId === 'nav_shop') {
@@ -391,7 +426,6 @@ app.post('/webhook', async (req, res) => {
     return;
   }
 
-  // 2. Plain text messages
   if (message.type === 'text') {
     const text = message.text.body.trim().toLowerCase();
 
