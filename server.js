@@ -26,7 +26,6 @@ async function fetchCsvData(url) {
 
     const rows = [];
     for (let i = 0; i < lines.length; i++) {
-      // Split commas while respecting basic quotes
       const cols = lines[i].split(',').map(c => c.replace(/^"|"$/g, '').trim());
       if (cols.length > 0 && cols[0]) {
         rows.push(cols);
@@ -72,7 +71,7 @@ async function fetchCourses() {
       category: cols[1] || 'General',
       duration: cols[2] || 'Flexible',
       fees: cols[3] || 'Contact Us',
-      highlights: cols[4] || 'Comprehensive practical training & certification.'
+      highlights: cols[4] || 'Practical training & certification.'
     });
   }
   return courses;
@@ -80,7 +79,7 @@ async function fetchCourses() {
 
 // --- WhatsApp Interactive UI Builders ---
 
-// Main Welcome Menu
+// Main Welcome Menu (Button titles are all <= 20 characters)
 async function sendMainMenu(to) {
   const payload = {
     messaging_product: 'whatsapp',
@@ -88,13 +87,13 @@ async function sendMainMenu(to) {
     type: 'interactive',
     interactive: {
       type: 'button',
-      header: { type: 'text', text: '🎓 Kaushalya Computer Centre' },
+      header: { type: 'text', text: 'Kaushalya Computer Centre' },
       body: { text: 'Welcome! We offer certified computer courses & hardware accessories.\n\nChoose an option below to explore:' },
       action: {
         buttons: [
-          { type: 'reply', reply: { id: 'nav_courses', title: '🎓 Computer Courses' } },
-          { type: 'reply', reply: { id: 'nav_shop', title: '🛒 Shop Accessories' } },
-          { type: 'reply', reply: { id: 'nav_info', title: '📍 Centre & Store Info' } }
+          { type: 'reply', reply: { id: 'nav_courses', title: '🎓 Courses' } },
+          { type: 'reply', reply: { id: 'nav_shop', title: '🛒 Accessories' } },
+          { type: 'reply', reply: { id: 'nav_info', title: '📍 Centre Info' } }
         ]
       }
     }
@@ -157,7 +156,7 @@ async function sendCourseList(to, categoryName) {
     type: 'interactive',
     interactive: {
       type: 'list',
-      header: { type: 'text', text: `📘 ${categoryName}` },
+      header: { type: 'text', text: `📘 ${categoryName.substring(0, 24)}` },
       body: { text: 'Choose a course to see complete syllabus and admission details:' },
       action: {
         button: 'View Courses',
@@ -184,7 +183,7 @@ async function sendCourseDetails(to, courseKey) {
     type: 'interactive',
     interactive: {
       type: 'button',
-      header: { type: 'text', text: `📘 ${crs.name}` },
+      header: { type: 'text', text: `📘 ${crs.name.substring(0, 24)}` },
       body: { 
         text: `• Category: ${crs.category}\n` +
               `• Duration: *${crs.duration}*\n` +
@@ -194,7 +193,7 @@ async function sendCourseDetails(to, courseKey) {
       },
       action: {
         buttons: [
-          { type: 'reply', reply: { id: `enq_course_${crs.name}`, title: '📝 Enquire / Join' } },
+          { type: 'reply', reply: { id: `enq_course_${crs.name.substring(0, 20)}`, title: '📝 Enquire / Join' } },
           { type: 'reply', reply: { id: 'nav_courses', title: '🎓 Other Courses' } }
         ]
       }
@@ -258,7 +257,7 @@ async function sendProductList(to, categoryName) {
     type: 'interactive',
     interactive: {
       type: 'list',
-      header: { type: 'text', text: `📦 ${categoryName}` },
+      header: { type: 'text', text: `📦 ${categoryName.substring(0, 24)}` },
       body: { text: 'Choose an item for details or to place an order:' },
       action: {
         button: 'Select Product',
@@ -285,11 +284,11 @@ async function sendProductDetails(to, itemKey) {
     type: 'interactive',
     interactive: {
       type: 'button',
-      header: { type: 'text', text: `📦 ${prod.item}` },
+      header: { type: 'text', text: `📦 ${prod.item.substring(0, 24)}` },
       body: { text: `• Category: ${prod.category}\n• Price: *₹${prod.price}*\n• Status: ✅ In Stock\n\nTap below to enquire or reserve this item!` },
       action: {
         buttons: [
-          { type: 'reply', reply: { id: `order_shp_${prod.item}`, title: '🛒 Order / Enquire' } },
+          { type: 'reply', reply: { id: `order_shp_${prod.item.substring(0, 20)}`, title: '🛒 Order / Enquire' } },
           { type: 'reply', reply: { id: 'nav_shop', title: '🛒 More Items' } }
         ]
       }
@@ -330,7 +329,7 @@ async function sendWhatsAppPayload(payload) {
       }
     );
   } catch (err) {
-    console.error('Send error:', err.response ? err.response.data : err.message);
+    console.error('Send error:', err.response ? JSON.stringify(err.response.data) : err.message);
   }
 }
 
@@ -424,7 +423,6 @@ app.post('/webhook', async (req, res) => {
     } else if (['price', 'shop', 'item', 'accessory', 'accessories'].some(k => text.includes(k))) {
       await sendProductCategories(from);
     } else {
-      // General fall-through prompt
       await sendMainMenu(from);
     }
   }
